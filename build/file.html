@@ -10,7 +10,7 @@
   <div class="container mt-5">
     <div class="max-w-md mx-auto bg-white shadow rounded px-4 py-5">
       <div class="message-container">
-        <div class="mb-3">
+        <!-- <div class="mb-3">
           <input
             id="roomInput"
             type="text"
@@ -24,8 +24,8 @@
           >
             Join
           </button>
-        </div>
-        <div id="messageContainer" class="message bg-primary text-white p-2 rounded-md my-1">
+        </div> -->
+        <div id="messageContainer" class="message bg-secondary text-white p-2 rounded-md my-1">
           
         </div>
         <div class="input-container mt-4">
@@ -58,24 +58,32 @@
 
       const socket = io("http://localhost:3001"); // Replace with your server URL
 
-      joinButton.addEventListener('click', () => {
-        const roomValue = roomInput.value.trim();
-        if (roomValue !== "") {
-          socket.emit("join_room", roomValue);
-        }
+      window.addEventListener("load", (event) => {
+        //const roomValue = roomInput.value.trim();
+        //if (roomValue !== "") {
+          socket.emit("join_room", "30");
+       // }
       });
 
       sendButton.addEventListener('click', () => {
         const inputValue = messageInput.value.trim();
         if (inputValue !== "") {
-          socket.emit("send-message", { text: inputValue, room: roomInput.value });
-          messageContainer.innerHTML += `<div class="message bg-info text-white p-2 float-right rounded-md my-1">${inputValue} </div>`;
+          socket.emit("send-message", { text: inputValue, room: "30"});
+          messageContainer.innerHTML += `
+          <div>
+            <span  style="width:300px; float:right !important" class="message bg-primary text-white p-2 rounded-md my-1">${inputValue} </span>
+           <span style="clear:both !important"></span>
+          </div>`;
           messageInput.value = "";
         }
       });
 
       socket.on("receive-message", (messageData) => {
-        messageContainer.innerHTML += `<div class="message bg-info text-white p-2 rounded-md my-1">${messageData.text} </div>`;
+        messageContainer.innerHTML += `
+        <div>
+          <span style="width:300px" class="message bg-info  float-left text-white p-2 rounded-md my-1">${messageData.text} </span>
+          <span style="clear:both !important"></span>
+        </div>`;
       });
     });
   </script>

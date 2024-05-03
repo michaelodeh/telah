@@ -1,6 +1,8 @@
 import express, { Express, Request, Response } from "express";
 import http from "http";
 import { Server } from "socket.io";
+const uri = "mongodb://localhost:27017";
+const dbName = "telah";
 
 const app: Express = express();
 const server: http.Server = http.createServer(app);

@@ -18,6 +18,7 @@ const io = new socket_io_1.Server(server, {
 });
 io.on("connection", (socket) => {
     console.log("a user connected");
+    // socket.join("30")
     socket.on("send-message", (message) => {
         console.log(message.room);
         socket.broadcast.to(message.room).emit("receive-message", {
