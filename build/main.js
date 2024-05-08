@@ -1,4 +1,27 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -13,15 +36,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const path_1 = __importDefault(require("path"));
 const http_1 = __importDefault(require("http"));
 const socket_io_1 = require("socket.io");
-const sqlite3_1 = __importDefault(require("sqlite3"));
 var passwordHash = require("password-hash");
+require("dotenv").config();
+const config_1 = __importStar(require("./db/config"));
 const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
-const port = 3001;
-// const host = "192.168.230.170";
+const port = Number(process.env.PORT || 3001);
+const host = process.env.SERVER_HOST || undefined;
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: true }));
 function empty(data) {
@@ -37,16 +60,9 @@ function empty(data) {
     return false;
 }
 const md5_1 = require("./md5");
-const dbPath = path_1.default.resolve("build", "database");
-console.log(dbPath);
-const db = new sqlite3_1.default.Database(dbPath, sqlite3_1.default.OPEN_READWRITE, (err) => {
-    if (err) {
-        console.error(err.message);
-    }
-    else {
-        console.log("Connected to the SQLite database.");
-    }
-});
+(() => __awaiter(void 0, void 0, void 0, function* () {
+    yield config_1.default.connect();
+}))();
 const io = new socket_io_1.Server(server, {
     cors: {
         origin: "*",
@@ -56,7 +72,7 @@ const io = new socket_io_1.Server(server, {
 });
 io.on("connection", (socket) => {
     console.log("a user connected");
-    socket.on("send-message", (message) => {
+    socket.on("send-message", (message) => __awaiter(void 0, void 0, void 0, function* () {
         var _a;
         console.log(message.channel);
         const date = new Date();
@@ -64,37 +80,39 @@ io.on("connection", (socket) => {
         const m = date.getMonth();
         const y = date.getFullYear();
         const createdAt = Date.now();
-        db.run("INSERT INTO messages (id,text, sender,receiver, channel,d,m,y,created_at) VALUES (?,?,?,?,?,?,?,?,?)", [
-            message.id,
-            message.text,
-            message.sender,
-            message.receiver,
-            message.channel,
-            d,
-            m,
-            y,
-            createdAt,
-        ], function (err) {
-            if (err) {
-                return console.log(err.message);
+        try {
+            const query = yield config_1.default.query("INSERT INTO messages (id,text, sender,receiver, channel,d,m,y,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)", [
+                message.id,
+                message.text,
+                message.sender,
+                message.receiver,
+                message.channel,
+                d,
+                m,
+                y,
+                createdAt,
+            ]);
+            if ((0, config_1.rowCount)(query.rowCount) > 0) {
+                console.log(`message sent successfully ${message}`);
+                if (empty(message.channel) || empty(message.text))
+                    return;
+                socket.to((_a = message.channel) !== null && _a !== void 0 ? _a : "").emit(`receive-message`, {
+                    text: message.text,
+                    sender: message.sender,
+                    receiver: message.receiver,
+                    channel: message.channel,
+                    id: message.id,
+                    d: d,
+                    m: m,
+                    y: y,
+                    created_at: createdAt,
+                });
             }
-            console.log(`A row has been inserted with row id ${message.id}`);
-        });
-        console.log(message);
-        if (empty(message.channel) || empty(message.text))
-            return;
-        socket.to((_a = message.channel) !== null && _a !== void 0 ? _a : "").emit(`receive-message`, {
-            text: message.text,
-            sender: message.sender,
-            receiver: message.receiver,
-            channel: message.channel,
-            id: message.id,
-            d: d,
-            m: m,
-            y: y,
-            date: createdAt,
-        });
-    });
+        }
+        catch (error) {
+            console.log(error);
+        }
+    }));
     socket.on("join_private_channel", (data) => {
         socket.join(data.channel);
         console.log(`${socket.id} joined ${data.channel}`);
@@ -128,17 +146,28 @@ app.post("/register", (req, res) => __awaiter(void 0, void 0, void 0, function* 
         errorMessage = "Passwords do not match";
     }
     try {
-        const existingUser = yield checkUserExistence(data.phone);
-        if (existingUser) {
+        const query = yield config_1.default.query("SELECT id FROM users WHERE phone=$1 LIMIT 1", [data.phone]);
+        if ((0, config_1.rowCount)(query.rowCount) > 0) {
             ready = false;
             errorMessage = "Phone number already exists";
         }
         if (ready) {
-            yield insertUser(id, data.name, data.phone, channel, password);
-            res.json({
-                status: "success",
-                data: { id: id, channel: channel, name: data.name, phone: data.phone },
-            });
+            const query = yield config_1.default.query("INSERT INTO users (id,name, phone, channel, password) VALUES ($1,$2,$3,$4,$5)", [id, data.name, data.phone, channel, password]);
+            if ((0, config_1.rowCount)(query.rowCount) > 0) {
+                console.log(`A row has been inserted with row id ${id}`);
+                res.json({
+                    status: "success",
+                    data: {
+                        id: id,
+                        channel: channel,
+                        name: data.name,
+                        phone: data.phone,
+                    },
+                });
+            }
+            else {
+                res.json({ status: "error", error: "An error occurred" });
+            }
         }
         else {
             res.json({ status: "error", error: errorMessage });
@@ -146,50 +175,13 @@ app.post("/register", (req, res) => __awaiter(void 0, void 0, void 0, function* 
     }
     catch (error) {
         console.error("Error:", error.message);
-        res.status(500).json({ status: "error", error: "Internal server error" });
+        res.json({ status: "error", error: "Internal server error" });
     }
 }));
-function checkUserExistence(phone) {
-    return __awaiter(this, void 0, void 0, function* () {
-        return new Promise((resolve, reject) => {
-            db.get("SELECT id FROM user WHERE phone=? LIMIT 1", [phone], (err, row) => {
-                if (err) {
-                    reject(err);
-                }
-                resolve(!!row);
-            });
-        });
-    });
-}
-function insertUser(id, name, phone, channel, password) {
-    return __awaiter(this, void 0, void 0, function* () {
-        return new Promise((resolve, reject) => {
-            db.run("INSERT INTO user (id,name, phone, channel, password) VALUES (?,?,?,?,?)", [id, name, phone, channel, password], (err) => {
-                if (err) {
-                    reject(err);
-                }
-                console.log(`A row has been inserted with row id ${id}`);
-                resolve();
-            });
-        });
-    });
-}
 app.get("/chat", (req, res) => {
     res.sendFile("file.html", { root: __dirname });
 });
 // Function to fetch user by phone number
-function getUserByPhone(phone) {
-    return new Promise((resolve, reject) => {
-        db.get("SELECT * FROM user WHERE phone=? LIMIT 1", [phone], (err, row) => {
-            if (err) {
-                reject(err);
-            }
-            else {
-                resolve(row);
-            }
-        });
-    });
-}
 app.post("/login", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const data = req.body;
     let ready = true;
@@ -204,11 +196,9 @@ app.post("/login", (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     }
     if (ready) {
         try {
-            const row = yield getUserByPhone(data.phone);
-            if (!row) {
-                res.json({ status: "error", error: "User not found" });
-            }
-            else {
+            const query = yield config_1.default.query("SELECT * FROM users WHERE phone=$1 LIMIT 1", [data.phone]);
+            if (query.rowCount) {
+                const row = query.rows[0];
                 try {
                     const passwordMatch = passwordHash.verify(data.password, row.password);
                     if (passwordMatch) {
@@ -224,6 +214,9 @@ app.post("/login", (req, res) => __awaiter(void 0, void 0, void 0, function* () 
                     res.json({ status: "error", error: "An error occurred" });
                 }
             }
+            else {
+                res.json({ status: "error", error: "User not found" });
+            }
         }
         catch (err) {
             console.log(err.message);
@@ -235,43 +228,39 @@ app.post("/login", (req, res) => __awaiter(void 0, void 0, void 0, function* () 
     }
 }));
 app.post("/users", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    function getUsers() {
-        return __awaiter(this, void 0, void 0, function* () {
-            return new Promise((resolve, reject) => {
-                db.all("SELECT name,id,channel FROM user WHERE id <> ?", [req.body.user], (err, rows) => {
-                    if (err) {
-                        reject(err);
-                    }
-                    else {
-                        resolve(rows);
-                    }
-                });
-            });
-        });
+    try {
+        const data = req.body;
+        const query = yield config_1.default.query("SELECT name,id,channel FROM users WHERE id <> $1", [data.user]);
+        if (query.rowCount) {
+            res.json({ status: "success", data: query.rows });
+        }
+        else {
+            res.json({ status: "error", error: "An error occurred" });
+        }
     }
-    const users = yield getUsers();
-    res.json({ status: "success", data: users });
+    catch (err) {
+        console.log(err.message);
+        res.json({ status: "error", error: "Internal server error" });
+    }
 }));
 app.post("/private-message", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
-    function getMessages() {
-        return __awaiter(this, void 0, void 0, function* () {
-            const sender = req.body.sender;
-            const receiver = req.body.receiver;
-            return new Promise((resolve, reject) => {
-                db.all("SELECT * FROM messages WHERE (sender=? AND receiver=?) OR (sender=? AND receiver=?) ORDER BY created_at DESC LIMIT 10", [sender, receiver, receiver, sender], (err, rows) => {
-                    if (err) {
-                        reject(err);
-                    }
-                    else {
-                        resolve(rows);
-                    }
-                });
-            });
-        });
+    const sender = req.body.sender;
+    const receiver = req.body.receiver;
+    let rows = [];
+    try {
+        const query = yield config_1.default.query("SELECT * FROM messages WHERE (sender=$1 AND receiver=$2) OR (sender=$3 AND receiver=$4) ORDER BY created_at DESC LIMIT 10", [sender, receiver, receiver, sender]);
+        if ((0, config_1.rowCount)(query.rowCount) > 0) {
+            rows = query.rows;
+        }
     }
-    const messages = yield getMessages();
-    res.json({ status: "success", data: messages });
+    catch (err) {
+        console.log(err.message);
+        res.json({ status: "error", error: "Internal server error" });
+        return;
+    }
+    res.json({ status: "success", data: rows });
 }));
-server.listen(port, () => {
-    //console.log(`server is running on  http://${host}:${port}`);
+server.listen(port, host, () => {
+    console.log(`server is running on  http://${host}:${port}`);
 });
+app.post("/private-message", (req, res) => __awaiter(void 0, void 0, void 0, function* () { }));

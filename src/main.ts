@@ -1,14 +1,14 @@
-import express, { Express, Request, Response } from "express";
-import path from "path";
+import express, { Express, query, Request, Response } from "express";
 import http from "http";
 import { Server } from "socket.io";
-import sqlite3, { Database } from "sqlite3";
 var passwordHash = require("password-hash");
+require("dotenv").config();
+import db, { rowCount } from "./db/config";
 
 const app: Express = express();
 const server: http.Server = http.createServer(app);
-const port: number = 3001;
-// const host = "192.168.230.170";
+const port: number = Number(process.env.PORT || 3001);
+const host = process.env.SERVER_HOST || undefined;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -27,20 +27,10 @@ function empty(data: any) {
 }
 
 import { randomMd5 } from "./md5";
-import { channel } from "diagnostics_channel";
-const dbPath = path.resolve("build", "database");
-console.log(dbPath);
-const db: Database = new sqlite3.Database(
-  dbPath,
-  sqlite3.OPEN_READWRITE,
-  (err) => {
-    if (err) {
-      console.error(err.message);
-    } else {
-      console.log("Connected to the SQLite database.");
-    }
-  }
-);
+
+(async () => {
+  await db.connect();
+})();
 
 const io = new Server(server, {
   cors: {
@@ -52,47 +42,48 @@ const io = new Server(server, {
 
 io.on("connection", (socket) => {
   console.log("a user connected");
-  socket.on("send-message", (message: Partial<MessageType>) => {
+  socket.on("send-message", async (message: Partial<MessageType>) => {
     console.log(message.channel);
     const date = new Date();
     const d = date.getDate();
     const m = date.getMonth();
     const y = date.getFullYear();
     const createdAt = Date.now();
-    db.run(
-      "INSERT INTO messages (id,text, sender,receiver, channel,d,m,y,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-      [
-        message.id,
-        message.text,
-        message.sender,
-        message.receiver,
-        message.channel,
-        d,
-        m,
-        y,
-        createdAt,
-      ],
-      function (err) {
-        if (err) {
-          return console.log(err.message);
-        }
-        console.log(`A row has been inserted with row id ${message.id}`);
+    try {
+      const query = await db.query(
+        "INSERT INTO messages (id,text, sender,receiver, channel,d,m,y,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        [
+          message.id,
+          message.text,
+          message.sender,
+          message.receiver,
+          message.channel,
+          d,
+          m,
+          y,
+          createdAt,
+        ]
+      );
+      if (rowCount(query.rowCount) > 0) {
+        console.log(`message sent successfully ${message}`);
+        if (empty(message.channel) || empty(message.text)) return;
+        socket.to(message.channel ?? "").emit(`receive-message`, {
+          text: message.text,
+          sender: message.sender,
+          receiver: message.receiver,
+          channel: message.channel,
+          id: message.id,
+          d: d,
+          m: m,
+          y: y,
+          created_at: createdAt,
+        });
       }
-    );
-    console.log(message);
-    if (empty(message.channel) || empty(message.text)) return;
-    socket.to(message.channel ?? "").emit(`receive-message`, {
-      text: message.text,
-      sender: message.sender,
-      receiver: message.receiver,
-      channel: message.channel,
-      id: message.id,
-      d: d,
-      m: m,
-      y: y,
-      date: createdAt,
-    });
+    } catch (error) {
+      console.log(error);
+    }
   });
+
   socket.on("join_private_channel", (data: channelType) => {
     socket.join(data.channel);
     console.log(`${socket.id} joined ${data.channel}`);
@@ -131,59 +122,44 @@ app.post("/register", async (req: Request, res: Response) => {
   }
 
   try {
-    const existingUser = await checkUserExistence(data.phone);
-    if (existingUser) {
+    const query = await db.query(
+      "SELECT id FROM users WHERE phone=$1 LIMIT 1",
+      [data.phone]
+    );
+
+    if (rowCount(query.rowCount) > 0) {
       ready = false;
       errorMessage = "Phone number already exists";
     }
 
     if (ready) {
-      await insertUser(id, data.name, data.phone, channel, password);
-      res.json({
-        status: "success",
-        data: { id: id, channel: channel, name: data.name, phone: data.phone },
-      });
+      const query = await db.query(
+        "INSERT INTO users (id,name, phone, channel, password) VALUES ($1,$2,$3,$4,$5)",
+        [id, data.name, data.phone, channel, password]
+      );
+
+      if (rowCount(query.rowCount) > 0) {
+        console.log(`A row has been inserted with row id ${id}`);
+        res.json({
+          status: "success",
+          data: {
+            id: id,
+            channel: channel,
+            name: data.name,
+            phone: data.phone,
+          },
+        });
+      } else {
+        res.json({ status: "error", error: "An error occurred" });
+      }
     } else {
       res.json({ status: "error", error: errorMessage });
     }
   } catch (error: any) {
     console.error("Error:", error.message);
-    res.status(500).json({ status: "error", error: "Internal server error" });
+    res.json({ status: "error", error: "Internal server error" });
   }
 });
-
-async function checkUserExistence(phone: string): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    db.get("SELECT id FROM user WHERE phone=? LIMIT 1", [phone], (err, row) => {
-      if (err) {
-        reject(err);
-      }
-      resolve(!!row);
-    });
-  });
-}
-
-async function insertUser(
-  id: string,
-  name: string,
-  phone: string,
-  channel: string,
-  password: string
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    db.run(
-      "INSERT INTO user (id,name, phone, channel, password) VALUES (?,?,?,?,?)",
-      [id, name, phone, channel, password],
-      (err) => {
-        if (err) {
-          reject(err);
-        }
-        console.log(`A row has been inserted with row id ${id}`);
-        resolve();
-      }
-    );
-  });
-}
 
 app.get("/chat", (req: Request, res: Response) => {
   res.sendFile("file.html", { root: __dirname });
@@ -197,21 +173,6 @@ interface UserRow {
 }
 
 // Function to fetch user by phone number
-function getUserByPhone(phone: string): Promise<UserRow | null> {
-  return new Promise((resolve, reject) => {
-    db.get(
-      "SELECT * FROM user WHERE phone=? LIMIT 1",
-      [phone],
-      (err, row: UserRow) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row);
-        }
-      }
-    );
-  });
-}
 
 app.post("/login", async (req: Request, res: Response) => {
   const data = req.body;
@@ -229,10 +190,13 @@ app.post("/login", async (req: Request, res: Response) => {
 
   if (ready) {
     try {
-      const row: any = await getUserByPhone(data.phone);
-      if (!row) {
-        res.json({ status: "error", error: "User not found" });
-      } else {
+      const query = await db.query(
+        "SELECT * FROM users WHERE phone=$1 LIMIT 1",
+        [data.phone]
+      );
+      if (query.rowCount) {
+        const row = query.rows[0];
+
         try {
           const passwordMatch = passwordHash.verify(
             data.password,
@@ -248,6 +212,8 @@ app.post("/login", async (req: Request, res: Response) => {
           console.log(e);
           res.json({ status: "error", error: "An error occurred" });
         }
+      } else {
+        res.json({ status: "error", error: "User not found" });
       }
     } catch (err: any) {
       console.log(err.message);
@@ -259,47 +225,46 @@ app.post("/login", async (req: Request, res: Response) => {
 });
 
 app.post("/users", async (req: Request, res: Response) => {
-  async function getUsers(): Promise<any> {
-    return new Promise((resolve, reject) => {
-      db.all(
-        "SELECT name,id,channel FROM user WHERE id <> ?",
-        [req.body.user],
-        (err, rows) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(rows);
-          }
-        }
-      );
-    });
+  try {
+    const data = req.body;
+    const query = await db.query(
+      "SELECT name,id,channel FROM users WHERE id <> $1",
+      [data.user]
+    );
+    if (query.rowCount) {
+      res.json({ status: "success", data: query.rows });
+    } else {
+      res.json({ status: "error", error: "An error occurred" });
+    }
+  } catch (err: any) {
+    console.log(err.message);
+    res.json({ status: "error", error: "Internal server error" });
   }
-  const users = await getUsers();
-  res.json({ status: "success", data: users });
 });
 
 app.post("/private-message", async (req: Request, res: Response) => {
-  async function getMessages(): Promise<any> {
-    const sender = req.body.sender;
-    const receiver = req.body.receiver;
-    return new Promise((resolve, reject) => {
-      db.all(
-        "SELECT * FROM messages WHERE (sender=? AND receiver=?) OR (sender=? AND receiver=?) ORDER BY created_at DESC LIMIT 10",
-        [sender, receiver, receiver, sender],
-        (err, rows) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(rows);
-          }
-        }
-      );
-    });
+  const sender = req.body.sender;
+  const receiver = req.body.receiver;
+  let rows: any[] = [];
+  try {
+    const query = await db.query(
+      "SELECT * FROM messages WHERE (sender=$1 AND receiver=$2) OR (sender=$3 AND receiver=$4) ORDER BY created_at DESC LIMIT 10",
+      [sender, receiver, receiver, sender]
+    );
+    if (rowCount(query.rowCount) > 0) {
+      rows = query.rows;
+    }
+  } catch (err: any) {
+    console.log(err.message);
+    res.json({ status: "error", error: "Internal server error" });
+    return;
   }
-  const messages = await getMessages();
-  res.json({ status: "success", data: messages });
+
+  res.json({ status: "success", data: rows });
 });
 
-server.listen(port, () => {
-  //console.log(`server is running on  http://${host}:${port}`);
+server.listen(port, host, () => {
+  console.log(`server is running on  http://${host}:${port}`);
 });
+
+app.post("/private-message", async (req: Request, res: Response) => {});
