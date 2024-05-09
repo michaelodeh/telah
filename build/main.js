@@ -243,6 +243,46 @@ app.post("/users", (req, res) => __awaiter(void 0, void 0, void 0, function* () 
         res.json({ status: "error", error: "Internal server error" });
     }
 }));
+app.post("/all-messages", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    try {
+        const data = req.body;
+        const userId = data.user;
+        let added = new Set();
+        const query = yield config_1.default.query("SELECT sender, receiver, text, created_at FROM messages WHERE (sender=$1) OR (receiver=$1)  ORDER BY created_at DESC LIMIT 10", [userId]);
+        let messages = [];
+        if ((0, config_1.rowCount)(query.rowCount) > 0) {
+            for (let msg of query.rows) {
+                if (!added.has(msg.sender) && !added.has(msg.receiver)) {
+                    if (msg.sender != userId)
+                        added.add(msg.sender);
+                    if (msg.receiver != userId)
+                        added.add(msg.receiver);
+                    if (msg.sender !== userId) {
+                        const userQuery = yield config_1.default.query("SELECT  name,id,channel FROM users WHERE id = $1 LIMIT 1", [msg.sender]);
+                        if ((0, config_1.rowCount)(userQuery.rowCount)) {
+                            msg.contact = userQuery.rows[0];
+                        }
+                    }
+                    else {
+                        const userQuery = yield config_1.default.query("SELECT  name,id,channel FROM users WHERE id = $1 LIMIT 1", [msg.receiver]);
+                        if ((0, config_1.rowCount)(userQuery.rowCount)) {
+                            msg.contact = userQuery.rows[0];
+                        }
+                    }
+                    messages.push(msg);
+                }
+            }
+            res.json({ status: "success", data: messages });
+        }
+        else {
+            res.json({ status: "error", error: "An error occurred" });
+        }
+    }
+    catch (err) {
+        console.log(err.message);
+        res.json({ status: "error", error: "Internal server error" });
+    }
+}));
 app.post("/private-message", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
     const sender = req.body.sender;
     const receiver = req.body.receiver;
@@ -258,7 +298,7 @@ app.post("/private-message", (req, res) => __awaiter(void 0, void 0, void 0, fun
         res.json({ status: "error", error: "Internal server error" });
         return;
     }
-    res.json({ status: "success", data: rows });
+    res.json({ status: "success", data: rows.reverse() });
 }));
 server.listen(port, host, () => {
     console.log(`server is running on  http://${host}:${port}`);
